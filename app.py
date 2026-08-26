@@ -1,5 +1,7 @@
 import os
+import smtplib
 from datetime import datetime
+from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from sqlalchemy import create_engine, text, inspect
@@ -15,6 +17,13 @@ if not DATABASE_URL:
     DATABASE_URL = 'sqlite:///leads.db'
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+EMAIL_RECIPIENTS = ['davinsmith03@gmail.com', 'sam@happysappliances.com']
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_USER = os.environ.get('EMAIL_USER', '').strip()
+EMAIL_APP_PASSWORD = os.environ.get('EMAIL_APP_PASSWORD', '').strip()
+EMAIL_FROM = os.environ.get('EMAIL_FROM', EMAIL_USER).strip()
 
 def init_db():
     with engine.begin() as conn:
@@ -55,6 +64,47 @@ def init_db():
 
 init_db()
 
+def format_appointment(date_value, time_value):
+    try:
+        date_text = datetime.strptime(date_value, '%Y-%m-%d').strftime('%m/%d/%Y') if date_value else 'Not selected'
+    except ValueError:
+        date_text = date_value or 'Not selected'
+    try:
+        time_text = datetime.strptime(time_value, '%H:%M').strftime('%-I:%M %p') if time_value else 'Not selected'
+    except (ValueError, OSError):
+        try:
+            time_text = datetime.strptime(time_value, '%H:%M').strftime('%I:%M %p').lstrip('0') if time_value else 'Not selected'
+        except ValueError:
+            time_text = time_value or 'Not selected'
+    return f'{time_text} {date_text}'
+
+def send_appointment_email(lead):
+    if not EMAIL_USER or not EMAIL_APP_PASSWORD or not EMAIL_FROM:
+        return
+
+    msg = EmailMessage()
+    msg['Subject'] = f"New Happys appointment request - {lead['name']}"
+    msg['From'] = EMAIL_FROM
+    msg['To'] = ', '.join(EMAIL_RECIPIENTS)
+    msg.set_content(f"""New appointment request
+
+Name: {lead['name']}
+Phone: {lead['phone']}
+Email: {lead['email'] or 'Not provided'}
+Location: {lead['service'] or 'Not selected'}
+Requested appointment: {format_appointment(lead['appointment_date'], lead['appointment_time'])}
+Source: {lead['source']}
+Notes: {lead['notes'] or 'None'}
+""")
+
+    try:
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=20) as server:
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+            server.send_message(msg)
+    except Exception as exc:
+        app.logger.exception('Appointment email notification failed: %s', exc)
+
 def admin_required(f):
     @wraps(f)
     def w(*a, **k):
@@ -70,24 +120,27 @@ def home():
             flash('Name and phone are required.')
             return redirect('/')
 
-        source = request.form.get('source', '').strip() or 'Direct / Unknown'
+        lead = {
+            'created_at': datetime.now().isoformat(timespec='seconds'),
+            'name': name,
+            'phone': phone,
+            'email': request.form.get('email', '').strip(),
+            'service': request.form.get('service', '').strip(),
+            'notes': request.form.get('notes', '').strip(),
+            'appointment_date': request.form.get('appointment_date', '').strip(),
+            'appointment_time': request.form.get('appointment_time', '').strip(),
+            'source': request.form.get('source', '').strip() or 'Direct / Unknown',
+        }
+
         with engine.begin() as conn:
             conn.execute(text('''
                 INSERT INTO leads
                 (created_at, name, phone, email, service, notes, appointment_date, appointment_time, source)
                 VALUES
                 (:created_at, :name, :phone, :email, :service, :notes, :appointment_date, :appointment_time, :source)
-            '''), {
-                'created_at': datetime.now().isoformat(timespec='seconds'),
-                'name': name,
-                'phone': phone,
-                'email': request.form.get('email', ''),
-                'service': request.form.get('service', ''),
-                'notes': request.form.get('notes', ''),
-                'appointment_date': request.form.get('appointment_date', ''),
-                'appointment_time': request.form.get('appointment_time', ''),
-                'source': source,
-            })
+            '''), lead)
+
+        send_appointment_email(lead)
         return redirect('/thank-you')
 
     source = request.args.get('source', '').strip() or 'Direct / Unknown'
