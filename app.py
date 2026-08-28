@@ -106,6 +106,7 @@ Notes: {lead['notes'] or 'None'}
         headers={
             'Authorization': f'Bearer {RESEND_API_KEY}',
             'Content-Type': 'application/json',
+            'User-Agent': 'happys-appointment-site/1.0',
         },
         method='POST',
     )
