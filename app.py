@@ -1,6 +1,7 @@
 import os
 import json
 import urllib.request
+import urllib.error
 from datetime import datetime
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
@@ -77,8 +78,9 @@ def format_appointment(date_value, time_value):
 
 def send_appointment_email(lead):
     if not RESEND_API_KEY:
-        app.logger.warning('RESEND_API_KEY is not configured; skipping appointment email.')
-        return
+        msg = 'FAILED: RESEND_API_KEY is not configured in Render.'
+        app.logger.warning(msg)
+        return msg
 
     body = f"""New appointment request
 
@@ -110,9 +112,19 @@ Notes: {lead['notes'] or 'None'}
 
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
-            app.logger.info('Appointment email sent through Resend: %s', response.status)
+            response_body = response.read().decode('utf-8', errors='replace')
+            msg = f'SENT: Resend accepted the email ({response.status}). {response_body}'
+            app.logger.info(msg)
+            return msg
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read().decode('utf-8', errors='replace')
+        msg = f'FAILED: Resend returned HTTP {exc.code}. {response_body}'
+        app.logger.error(msg)
+        return msg
     except Exception as exc:
-        app.logger.exception('Appointment email notification failed: %s', exc)
+        msg = f'FAILED: {type(exc).__name__}: {exc}'
+        app.logger.exception(msg)
+        return msg
 
 def admin_required(f):
     @wraps(f)
@@ -149,7 +161,9 @@ def home():
                 (:created_at, :name, :phone, :email, :service, :notes, :appointment_date, :appointment_time, :source)
             '''), lead)
 
-        send_appointment_email(lead)
+        email_status = send_appointment_email(lead)
+        if name.upper().startswith('EMAIL TEST'):
+            session['email_debug'] = email_status
         return redirect('/thank-you')
 
     source = request.args.get('source', '').strip() or 'Direct / Unknown'
@@ -157,7 +171,8 @@ def home():
 
 @app.route('/thank-you')
 def thanks():
-    return render_template('thank_you.html')
+    email_debug = session.pop('email_debug', None)
+    return render_template('thank_you.html', email_debug=email_debug)
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
