@@ -1,7 +1,7 @@
 import os
-import smtplib
+import json
+import urllib.request
 from datetime import datetime
-from email.message import EmailMessage
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from sqlalchemy import create_engine, text, inspect
@@ -18,12 +18,9 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-EMAIL_RECIPIENTS = ['davinsmith03@gmail.com', 'sam@happysappliances.com']
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
-EMAIL_USER = os.environ.get('EMAIL_USER', '').strip()
-EMAIL_APP_PASSWORD = os.environ.get('EMAIL_APP_PASSWORD', '').strip()
-EMAIL_FROM = os.environ.get('EMAIL_FROM', EMAIL_USER).strip()
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+RESEND_FROM = os.environ.get('RESEND_FROM', 'Happys Appointments <onboarding@resend.dev>').strip()
+RESEND_RECIPIENTS = [x.strip() for x in os.environ.get('RESEND_RECIPIENTS', 'davinsmith03@gmail.com').split(',') if x.strip()]
 
 def init_db():
     with engine.begin() as conn:
@@ -79,14 +76,11 @@ def format_appointment(date_value, time_value):
     return f'{time_text} {date_text}'
 
 def send_appointment_email(lead):
-    if not EMAIL_USER or not EMAIL_APP_PASSWORD or not EMAIL_FROM:
+    if not RESEND_API_KEY:
+        app.logger.warning('RESEND_API_KEY is not configured; skipping appointment email.')
         return
 
-    msg = EmailMessage()
-    msg['Subject'] = f"New Happys appointment request - {lead['name']}"
-    msg['From'] = EMAIL_FROM
-    msg['To'] = ', '.join(EMAIL_RECIPIENTS)
-    msg.set_content(f"""New appointment request
+    body = f"""New appointment request
 
 Name: {lead['name']}
 Phone: {lead['phone']}
@@ -95,13 +89,28 @@ Location: {lead['service'] or 'Not selected'}
 Requested appointment: {format_appointment(lead['appointment_date'], lead['appointment_time'])}
 Source: {lead['source']}
 Notes: {lead['notes'] or 'None'}
-""")
+"""
+
+    payload = json.dumps({
+        'from': RESEND_FROM,
+        'to': RESEND_RECIPIENTS,
+        'subject': f"New Happys appointment request - {lead['name']}",
+        'text': body,
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        'https://api.resend.com/emails',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {RESEND_API_KEY}',
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
 
     try:
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=20) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_APP_PASSWORD)
-            server.send_message(msg)
+        with urllib.request.urlopen(req, timeout=20) as response:
+            app.logger.info('Appointment email sent through Resend: %s', response.status)
     except Exception as exc:
         app.logger.exception('Appointment email notification failed: %s', exc)
 
