@@ -21,7 +21,7 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 RESEND_FROM = os.environ.get('RESEND_FROM', 'Happys Appointments <onboarding@resend.dev>').strip()
-RESEND_RECIPIENTS = [x.strip() for x in os.environ.get('RESEND_RECIPIENTS', 'davinsmith03@gmail.com').split(',') if x.strip()]
+RESEND_RECIPIENTS = [x.strip() for x in os.environ.get('RESEND_RECIPIENTS', 'davinsmith03@gmail.com,sam@happysappliances.com').split(',') if x.strip()]
 
 def init_db():
     with engine.begin() as conn:
