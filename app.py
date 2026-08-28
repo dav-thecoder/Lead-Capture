@@ -76,26 +76,10 @@ def format_appointment(date_value, time_value):
             time_text = time_value or 'Not selected'
     return f'{time_text} {date_text}'
 
-def send_appointment_email(lead):
-    if not RESEND_API_KEY:
-        msg = 'FAILED: RESEND_API_KEY is not configured in Render.'
-        app.logger.warning(msg)
-        return msg
-
-    body = f"""New appointment request
-
-Name: {lead['name']}
-Phone: {lead['phone']}
-Email: {lead['email'] or 'Not provided'}
-Location: {lead['service'] or 'Not selected'}
-Requested appointment: {format_appointment(lead['appointment_date'], lead['appointment_time'])}
-Source: {lead['source']}
-Notes: {lead['notes'] or 'None'}
-"""
-
+def send_one_email(recipient, lead, body):
     payload = json.dumps({
         'from': RESEND_FROM,
-        'to': RESEND_RECIPIENTS,
+        'to': [recipient],
         'subject': f"New Happys appointment request - {lead['name']}",
         'text': body,
     }).encode('utf-8')
@@ -114,18 +98,38 @@ Notes: {lead['notes'] or 'None'}
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             response_body = response.read().decode('utf-8', errors='replace')
-            msg = f'SENT: Resend accepted the email ({response.status}). {response_body}'
+            msg = f'SENT to {recipient}: Resend accepted the email ({response.status}). {response_body}'
             app.logger.info(msg)
             return msg
     except urllib.error.HTTPError as exc:
         response_body = exc.read().decode('utf-8', errors='replace')
-        msg = f'FAILED: Resend returned HTTP {exc.code}. {response_body}'
+        msg = f'FAILED to {recipient}: Resend returned HTTP {exc.code}. {response_body}'
         app.logger.error(msg)
         return msg
     except Exception as exc:
-        msg = f'FAILED: {type(exc).__name__}: {exc}'
+        msg = f'FAILED to {recipient}: {type(exc).__name__}: {exc}'
         app.logger.exception(msg)
         return msg
+
+def send_appointment_email(lead):
+    if not RESEND_API_KEY:
+        msg = 'FAILED: RESEND_API_KEY is not configured in Render.'
+        app.logger.warning(msg)
+        return msg
+
+    body = f"""New appointment request
+
+Name: {lead['name']}
+Phone: {lead['phone']}
+Email: {lead['email'] or 'Not provided'}
+Location: {lead['service'] or 'Not selected'}
+Requested appointment: {format_appointment(lead['appointment_date'], lead['appointment_time'])}
+Source: {lead['source']}
+Notes: {lead['notes'] or 'None'}
+"""
+
+    results = [send_one_email(recipient, lead, body) for recipient in RESEND_RECIPIENTS]
+    return ' | '.join(results)
 
 def admin_required(f):
     @wraps(f)
